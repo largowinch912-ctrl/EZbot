@@ -27,7 +27,6 @@ client.once(Events.ClientReady, c => {
   console.log(`✅ Connecté en tant que ${c.user.tag}`);
 });
 
-// Commande !pingbutton → envoie le bouton
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
   if (message.content !== COMMAND) return;
@@ -36,7 +35,7 @@ client.on(Events.MessageCreate, async message => {
     return message.reply('❌ Tu n\'as pas la permission.');
   }
 
- const buttonCompo = new ButtonBuilder()
+  const buttonCompo = new ButtonBuilder()
     .setCustomId(BUTTON_ID)
     .setLabel('⚔️ Perco attaqué + compo')
     .setStyle(ButtonStyle.Danger);
@@ -48,33 +47,15 @@ client.on(Events.MessageCreate, async message => {
 
   const row = new ActionRowBuilder().addComponents(buttonCompo, buttonRapide);
 
-  if (interaction.isButton() && interaction.customId === 'ping_rapide') {
-    const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
-
-    const alertMsg = await channel.send(
-      `<@&${ROLE_ID}>\n` +
-      `⚔️ **PERCO ATTAQUÉ !**\n` +
-      `🛡️ Go def les EZ !`
-    );
-
-    setTimeout(() => {
-      alertMsg.delete().catch(() => {});
-    }, 30 * 60 * 1000);
-
-    await interaction.reply({
-      content: '✅ Ping rapide envoyé !',
-      ephemeral: true,
-    });
-  }
   await message.channel.send({
     content: '🔴 Un percepteur est en danger ?',
     components: [row],
   });
 });
 
-// Clic sur le bouton → affiche le menu de sélection des classes
 client.on(Events.InteractionCreate, async interaction => {
 
+  // Bouton compo
   if (interaction.isButton() && interaction.customId === BUTTON_ID) {
     const menu = new StringSelectMenuBuilder()
       .setCustomId(MENU_ID)
@@ -98,7 +79,27 @@ client.on(Events.InteractionCreate, async interaction => {
     });
   }
 
-  // Validation du menu → envoie l'alerte
+  // Bouton ping rapide
+  if (interaction.isButton() && interaction.customId === 'ping_rapide') {
+    const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
+
+    const alertMsg = await channel.send(
+      `<@&${ROLE_ID}>\n` +
+      `⚔️ **PERCO ATTAQUÉ !**\n` +
+      `🛡️ Go def les EZ !`
+    );
+
+    setTimeout(() => {
+      alertMsg.delete().catch(() => {});
+    }, 30 * 60 * 1000);
+
+    await interaction.reply({
+      content: '✅ Ping rapide envoyé !',
+      ephemeral: true,
+    });
+  }
+
+  // Menu sélection classes
   if (interaction.isStringSelectMenu() && interaction.customId === MENU_ID) {
     const compo = interaction.values
       .map(v => v.charAt(0).toUpperCase() + v.slice(1))
@@ -107,16 +108,15 @@ client.on(Events.InteractionCreate, async interaction => {
     const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
 
     const alertMsg = await channel.send(
-  `<@&${ROLE_ID}>\n` +
-  `⚔️ **PERCO ATTAQUÉ !**\n` +
-  `👥 **Composition ennemie :** ${compo}\n` +
-  `🛡️ Go def les EZ !`
-);
+      `<@&${ROLE_ID}>\n` +
+      `⚔️ **PERCO ATTAQUÉ !**\n` +
+      `👥 **Composition ennemie :** ${compo}\n` +
+      `🛡️ Go def les EZ !`
+    );
 
-// Supprime le message après 30 minutes
-setTimeout(() => {
-  alertMsg.delete().catch(() => {});
-}, 30 * 60 * 1000);
+    setTimeout(() => {
+      alertMsg.delete().catch(() => {});
+    }, 30 * 60 * 1000);
 
     await interaction.reply({
       content: '✅ Alerte envoyée !',
