@@ -36,13 +36,36 @@ client.on(Events.MessageCreate, async message => {
     return message.reply('❌ Tu n\'as pas la permission.');
   }
 
-  const button = new ButtonBuilder()
+ const buttonCompo = new ButtonBuilder()
     .setCustomId(BUTTON_ID)
-    .setLabel('⚔️ Perco attaqué !')
+    .setLabel('⚔️ Perco attaqué + compo')
     .setStyle(ButtonStyle.Danger);
 
-  const row = new ActionRowBuilder().addComponents(button);
+  const buttonRapide = new ButtonBuilder()
+    .setCustomId('ping_rapide')
+    .setLabel('🔔 Ping rapide')
+    .setStyle(ButtonStyle.Secondary);
 
+  const row = new ActionRowBuilder().addComponents(buttonCompo, buttonRapide);
+
+  if (interaction.isButton() && interaction.customId === 'ping_rapide') {
+    const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
+
+    const alertMsg = await channel.send(
+      `<@&${ROLE_ID}>\n` +
+      `⚔️ **PERCO ATTAQUÉ !**\n` +
+      `🛡️ Go def les EZ !`
+    );
+
+    setTimeout(() => {
+      alertMsg.delete().catch(() => {});
+    }, 30 * 60 * 1000);
+
+    await interaction.reply({
+      content: '✅ Ping rapide envoyé !',
+      ephemeral: true,
+    });
+  }
   await message.channel.send({
     content: '🔴 Un percepteur est en danger ?',
     components: [row],
