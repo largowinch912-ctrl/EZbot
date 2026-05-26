@@ -83,12 +83,17 @@ client.on(Events.InteractionCreate, async interaction => {
 
     const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
 
-    await channel.send(
-      `<@&${ROLE_ID}>\n` +
-      `⚔️ **PERCO ATTAQUÉ !**\n` +
-      `👥 **Composition ennemie :** ${compo}\n` +
-      `🛡️ Go def les EZ !`
-    );
+    const alertMsg = await channel.send(
+  `<@&${ROLE_ID}>\n` +
+  `⚔️ **PERCO ATTAQUÉ !**\n` +
+  `👥 **Composition ennemie :** ${compo}\n` +
+  `🛡️ Go def les EZ !`
+);
+
+// Supprime le message après 30 minutes
+setTimeout(() => {
+  alertMsg.delete().catch(() => {});
+}, 30 * 60 * 1000);
 
     await interaction.reply({
       content: '✅ Alerte envoyée !',
