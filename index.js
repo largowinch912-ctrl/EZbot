@@ -201,9 +201,8 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   const authorTag = reaction.message.author.username;
   if (reaction.message.author.bot) return;
 
-  const total = await addKill(authorId, authorTag);
-  await reaction.message.reply(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`);
-});
+const total = await addKill(authorId, authorTag);
+await user.send(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
 
 // ─── Retrait de la réaction = annule la kill ──────────────────────
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
