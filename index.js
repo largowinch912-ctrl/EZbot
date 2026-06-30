@@ -244,6 +244,8 @@ for (const [playerId, playerName] of players) {
 await user.send(`✅ Points attribués :\n${recap}`).catch(() => {});
 await updateLiveClassement();
 
+});
+
 // ─── Retrait de la réaction = annule la kill ──────────────────────
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (user.bot) return;
@@ -277,6 +279,8 @@ for (const [playerId] of players) {
 }
 
 await updateLiveClassement();
+
+});
 
 client.on(Events.InteractionCreate, async interaction => {
 
