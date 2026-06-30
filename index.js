@@ -38,7 +38,7 @@ const CLASSES = [
   'Zobal', 'Steamer'
 ];
 
-// ─── MongoDB Schema kills ──────────────────────────────────────────
+// ─── MongoDB Schemas ────────────────────────────────────────────────
 const killSchema = new mongoose.Schema({
   userId: String,
   username: String,
@@ -46,11 +46,18 @@ const killSchema = new mongoose.Schema({
 });
 const Kill = mongoose.model('Kill', killSchema);
 
+const configSchema = new mongoose.Schema({
+  _id: { type: String, default: 'classement_message' },
+  channelId: String,
+  messageId: String,
+});
+const Config = mongoose.model('Config', configSchema);
+
 async function addKill(userId, username) {
   let entry = await Kill.findOne({ userId });
   if (!entry) entry = await Kill.create({ userId, username, kills: 0 });
   entry.kills += 1;
-  entry.username = username; // garde le pseudo à jour
+  entry.username = username;
   await entry.save();
   return entry.kills;
 }
@@ -71,19 +78,43 @@ async function resetClassement() {
   await Kill.deleteMany({});
 }
 
+function buildClassementText(top) {
+  let msg = '🏆 **Classement de la semaine — Chasse aux percepteurs**\n\n';
+  if (top.length === 0) {
+    msg += 'Aucune kill validée pour le moment.';
+  } else {
+    const medals = ['🥇', '🥈', '🥉'];
+    top.forEach((e, i) => {
+      msg += `${medals[i] || `${i + 1}.`} **${e.username}** — ${e.kills} kills\n`;
+    });
+  }
+  msg += '\n🔄 Reset automatique chaque mardi à 13h.';
+  return msg;
+}
+
+// ─── Met à jour le message live du classement ─────────────────────
+async function updateLiveClassement() {
+  const config = await Config.findById('classement_message');
+  if (!config) return;
+
+  try {
+    const channel = await client.channels.fetch(config.channelId);
+    const message = await channel.messages.fetch(config.messageId);
+    const top = await getClassement();
+    await message.edit(buildClassementText(top));
+  } catch (err) {
+    console.error('Impossible de mettre à jour le classement live:', err.message);
+  }
+}
+
 // ─── Reset hebdo automatique : mardi 13h ──────────────────────────
 function msUntilNextTuesday13h() {
   const now = new Date();
   const target = new Date(now);
   target.setHours(13, 0, 0, 0);
-
-  const day = now.getDay(); // 0 = dimanche, 2 = mardi
+  const day = now.getDay();
   let diff = (2 - day + 7) % 7;
-
-  if (diff === 0 && now >= target) {
-    diff = 7; // mardi déjà passé cette semaine → semaine prochaine
-  }
-
+  if (diff === 0 && now >= target) diff = 7;
   target.setDate(now.getDate() + diff);
   return target.getTime() - now.getTime();
 }
@@ -105,11 +136,12 @@ function scheduleWeeklyReset() {
       }
       await channel.send(msg);
       await resetClassement();
+      await updateLiveClassement();
       await channel.send('🔄 Le classement a été réinitialisé. Nouvel event en cours !');
     } catch (err) {
       console.error('Erreur reset hebdo:', err);
     }
-    scheduleWeeklyReset(); // reprogramme pour la semaine suivante
+    scheduleWeeklyReset();
   }, delay);
 }
 
@@ -117,7 +149,8 @@ function scheduleWeeklyReset() {
 async function registerSlashCommand() {
   const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
   const commands = [
-    new SlashCommandBuilder().setName('classement').setDescription('Affiche le classement des kills de percepteurs'),
+    new SlashCommandBuilder().setName('classement').setDescription('Affiche le classement live des kills de percepteurs'),
+    new SlashCommandBuilder().setName('reset-classement').setDescription('Réinitialise manuellement le classement (admin)'),
   ].map(c => c.toJSON());
   const guilds = client.guilds.cache.map(g => g.id);
   for (const guildId of guilds) {
@@ -139,19 +172,15 @@ client.on(Events.MessageCreate, async message => {
     if (!message.member.permissions.has('Administrator')) {
       return message.reply('❌ Tu n\'as pas la permission.');
     }
-
     const buttonCompo = new ButtonBuilder()
       .setCustomId(BUTTON_ID)
       .setLabel('⚔️ Perco attaqué + compo')
       .setStyle(ButtonStyle.Danger);
-
     const buttonRapide = new ButtonBuilder()
       .setCustomId('ping_rapide')
       .setLabel('🔔 Ping rapide')
       .setStyle(ButtonStyle.Secondary);
-
     const row = new ActionRowBuilder().addComponents(buttonCompo, buttonRapide);
-
     await message.channel.send({
       content: '🔴 Un percepteur est en danger ?',
       components: [row],
@@ -163,14 +192,11 @@ client.on(Events.MessageCreate, async message => {
     if (!message.member.permissions.has('Administrator')) {
       return message.reply('❌ Tu n\'as pas la permission.');
     }
-
     const buttonDonjon = new ButtonBuilder()
       .setCustomId('donjon_ticket')
       .setLabel('🗝️ Demander un passage donjon')
       .setStyle(ButtonStyle.Primary);
-
     const row = new ActionRowBuilder().addComponents(buttonDonjon);
-
     await message.channel.send({
       content: '🗝️ **Besoin d\'un passage donjon ?**\nClique sur le bouton ci-dessous pour faire ta demande :',
       components: [row],
@@ -193,16 +219,18 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
     return;
   }
 
+  if (reaction.message.author.bot) return;
+
   const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
   const isAdmin = member?.permissions.has('Administrator');
-  if (!isAdmin) return; // seul un admin peut valider
+  if (!isAdmin) return;
 
   const authorId = reaction.message.author.id;
   const authorTag = reaction.message.author.username;
-  if (reaction.message.author.bot) return;
 
-const total = await addKill(authorId, authorTag);
-await user.send(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
+  const total = await addKill(authorId, authorTag);
+  await user.send(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
+  await updateLiveClassement();
 });
 
 // ─── Retrait de la réaction = annule la kill ──────────────────────
@@ -219,31 +247,42 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
     return;
   }
 
+  if (reaction.message.author.bot) return;
+
   const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
   const isAdmin = member?.permissions.has('Administrator');
   if (!isAdmin) return;
 
-  if (reaction.message.author.bot) return;
   const authorId = reaction.message.author.id;
   await removeKill(authorId);
+  await updateLiveClassement();
 });
 
 client.on(Events.InteractionCreate, async interaction => {
 
-  // ── /classement ──
+  // ── /reset-classement ──
+  if (interaction.isChatInputCommand() && interaction.commandName === 'reset-classement') {
+    if (!interaction.member.permissions.has('Administrator')) {
+      return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
+    }
+    await resetClassement();
+    await updateLiveClassement();
+    await interaction.reply({ content: '🔄 Le classement a été réinitialisé manuellement !' });
+    return;
+  }
+
+  // ── /classement (crée ou rattache le message live) ──
   if (interaction.isChatInputCommand() && interaction.commandName === 'classement') {
     const top = await getClassement();
-    let msg = '🏆 **Classement de la semaine — Chasse aux percepteurs**\n\n';
-    if (top.length === 0) {
-      msg += 'Aucune kill validée pour le moment.';
-    } else {
-      const medals = ['🥇', '🥈', '🥉'];
-      top.forEach((e, i) => {
-        msg += `${medals[i] || `${i + 1}.`} **${e.username}** — ${e.kills} kills\n`;
-      });
-    }
-    msg += '\n🔄 Reset automatique chaque mardi à 13h.';
-    await interaction.reply({ content: msg });
+    const text = buildClassementText(top);
+
+    const sentMessage = await interaction.reply({ content: text, fetchReply: true });
+
+    await Config.findByIdAndUpdate(
+      'classement_message',
+      { channelId: interaction.channelId, messageId: sentMessage.id },
+      { upsert: true }
+    );
     return;
   }
 
@@ -261,9 +300,7 @@ client.on(Events.InteractionCreate, async interaction => {
             .setValue(classe.toLowerCase())
         )
       );
-
     const row = new ActionRowBuilder().addComponents(menu);
-
     await interaction.reply({
       content: '⚔️ Sélectionne la composition ennemie :',
       components: [row],
@@ -275,21 +312,13 @@ client.on(Events.InteractionCreate, async interaction => {
   // ── Bouton ping rapide (perco) ──
   if (interaction.isButton() && interaction.customId === 'ping_rapide') {
     const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
-
     const alertMsg = await channel.send(
       `<@&${ROLE_ID}>\n` +
       `⚔️ **PERCO ATTAQUÉ !**\n` +
       `🛡️ Go def les EZ !`
     );
-
-    setTimeout(() => {
-      alertMsg.delete().catch(() => {});
-    }, 30 * 60 * 1000);
-
-    await interaction.reply({
-      content: '✅ Ping rapide envoyé !',
-      ephemeral: true,
-    });
+    setTimeout(() => { alertMsg.delete().catch(() => {}); }, 30 * 60 * 1000);
+    await interaction.reply({ content: '✅ Ping rapide envoyé !', ephemeral: true });
     return;
   }
 
@@ -298,24 +327,15 @@ client.on(Events.InteractionCreate, async interaction => {
     const compo = interaction.values
       .map(v => v.charAt(0).toUpperCase() + v.slice(1))
       .join(' | ');
-
     const channel = await interaction.guild.channels.fetch(CHANNEL_ID);
-
     const alertMsg = await channel.send(
       `<@&${ROLE_ID}>\n` +
       `⚔️ **PERCO ATTAQUÉ !**\n` +
       `👥 **Composition ennemie :** ${compo}\n` +
       `🛡️ Go def les EZ !`
     );
-
-    setTimeout(() => {
-      alertMsg.delete().catch(() => {});
-    }, 30 * 60 * 1000);
-
-    await interaction.reply({
-      content: '✅ Alerte envoyée !',
-      ephemeral: true,
-    });
+    setTimeout(() => { alertMsg.delete().catch(() => {}); }, 30 * 60 * 1000);
+    await interaction.reply({ content: '✅ Alerte envoyée !', ephemeral: true });
     return;
   }
 
@@ -324,24 +344,14 @@ client.on(Events.InteractionCreate, async interaction => {
     const modal = new ModalBuilder()
       .setCustomId('modal_donjon_ticket')
       .setTitle('🗝️ Demande de passage donjon');
-
     modal.addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('nom_donjon')
-          .setLabel('Quel donjon ?')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
+        new TextInputBuilder().setCustomId('nom_donjon').setLabel('Quel donjon ?').setStyle(TextInputStyle.Short).setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('nb_perso')
-          .setLabel('Nombre de personnages')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
+        new TextInputBuilder().setCustomId('nb_perso').setLabel('Nombre de personnages').setStyle(TextInputStyle.Short).setRequired(true)
       )
     );
-
     await interaction.showModal(modal);
     return;
   }
@@ -349,9 +359,7 @@ client.on(Events.InteractionCreate, async interaction => {
   // ── Bouton fermer ticket ──
   if (interaction.isButton() && interaction.customId === 'fermer_ticket') {
     await interaction.reply({ content: '🔒 Fermeture du ticket dans 5 secondes...' });
-    setTimeout(() => {
-      interaction.channel.delete().catch(() => {});
-    }, 5000);
+    setTimeout(() => { interaction.channel.delete().catch(() => {}); }, 5000);
     return;
   }
 
@@ -376,26 +384,14 @@ client.on(Events.InteractionCreate, async interaction => {
       type: ChannelType.GuildText,
       parent: TICKET_CATEGORY_ID,
       permissionOverwrites: [
-        {
-          id: guild.roles.everyone.id,
-          deny: [PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: interaction.user.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-        },
-        {
-          id: passeurRole.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-        },
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: passeurRole.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       ],
     });
 
     const closeButton = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('fermer_ticket')
-        .setLabel('🔒 Fermer le ticket')
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('fermer_ticket').setLabel('🔒 Fermer le ticket').setStyle(ButtonStyle.Danger)
     );
 
     await ticketChannel.send({
