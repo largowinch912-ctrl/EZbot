@@ -31,6 +31,7 @@ const DONJON_COMMAND     = '!donjonbutton';
 // ─── Config event PvP kills perco ─────────────────────────────────
 const KILL_CHANNEL_ID = '1470066386150752457';
 const VALIDATION_EMOJI = '✅';
+const BONUS_EMOJI = '🔥';
 
 const CLASSES = [
   'Iop', 'Crâ', 'Eniripsa', 'Féca', 'Ecaflip', 'Sadida',
@@ -53,19 +54,19 @@ const configSchema = new mongoose.Schema({
 });
 const Config = mongoose.model('Config', configSchema);
 
-async function addKill(userId, username) {
+async function addKill(userId, username, points = 1) {
   let entry = await Kill.findOne({ userId });
   if (!entry) entry = await Kill.create({ userId, username, kills: 0 });
-  entry.kills += 1;
+  entry.kills += points;
   entry.username = username;
   await entry.save();
   return entry.kills;
 }
 
-async function removeKill(userId) {
+async function removeKill(userId, points = 1) {
   const entry = await Kill.findOne({ userId });
   if (!entry || entry.kills <= 0) return 0;
-  entry.kills -= 1;
+  entry.kills = Math.max(0, entry.kills - points);
   await entry.save();
   return entry.kills;
 }
@@ -209,7 +210,7 @@ client.on(Events.MessageCreate, async message => {
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
   if (reaction.message.channelId !== KILL_CHANNEL_ID) return;
-  if (reaction.emoji.name !== VALIDATION_EMOJI) return;
+  if (![VALIDATION_EMOJI, BONUS_EMOJI].includes(reaction.emoji.name)) return;
 
   try {
     if (reaction.partial) await reaction.fetch();
@@ -227,9 +228,10 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
   const authorId = reaction.message.author.id;
   const authorTag = reaction.message.author.username;
+  const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
 
-  const total = await addKill(authorId, authorTag);
-  await user.send(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
+  const total = await addKill(authorId, authorTag, points);
+  await user.send(`✅ +${points} point${points > 1 ? 's' : ''} pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
   await updateLiveClassement();
 });
 
@@ -237,7 +239,7 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (user.bot) return;
   if (reaction.message.channelId !== KILL_CHANNEL_ID) return;
-  if (reaction.emoji.name !== VALIDATION_EMOJI) return;
+  if (![VALIDATION_EMOJI, BONUS_EMOJI].includes(reaction.emoji.name)) return;
 
   try {
     if (reaction.partial) await reaction.fetch();
@@ -254,7 +256,8 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (!isAdmin) return;
 
   const authorId = reaction.message.author.id;
-  await removeKill(authorId);
+  const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
+  await removeKill(authorId, points);
   await updateLiveClassement();
 });
 
