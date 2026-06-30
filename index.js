@@ -21,7 +21,7 @@ const COMMAND    = '!pingbutton';
 
 // ─── Config tickets donjon ────────────────────────────────────────
 const TICKET_CATEGORY_ID = '1521427740341964840';
-const PASSEUR_ROLE_NAME  = 'Passeur donjon';
+const PASSEUR_ROLE_NAME  = 'Passeur Donjon';
 const DONJON_COMMAND     = '!donjonbutton';
 
 const CLASSES = [
