@@ -1,16 +1,20 @@
 const { Client, GatewayIntentBits, ActionRowBuilder,
-        ButtonBuilder, ButtonStyle, Events,
+        ButtonBuilder, ButtonStyle, Events, Partials,
         StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
         ModalBuilder, TextInputBuilder, TextInputStyle,
-        ChannelType, PermissionFlagsBits } = require('discord.js');
+        ChannelType, PermissionFlagsBits,
+        REST, Routes, SlashCommandBuilder } = require('discord.js');
 require('dotenv').config();
+const mongoose = require('mongoose');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-  ]
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
 const ROLE_ID    = process.env.ROLE_ID;
@@ -21,8 +25,12 @@ const COMMAND    = '!pingbutton';
 
 // ─── Config tickets donjon ────────────────────────────────────────
 const TICKET_CATEGORY_ID = '1521427740341964840';
-const PASSEUR_ROLE_NAME  = 'Passeur Donjon';
+const PASSEUR_ROLE_NAME  = 'Passeur donjon';
 const DONJON_COMMAND     = '!donjonbutton';
+
+// ─── Config event PvP kills perco ─────────────────────────────────
+const KILL_CHANNEL_ID = '1470066386150752457';
+const VALIDATION_EMOJI = '✅';
 
 const CLASSES = [
   'Iop', 'Crâ', 'Eniripsa', 'Féca', 'Ecaflip', 'Sadida',
@@ -30,11 +38,100 @@ const CLASSES = [
   'Zobal', 'Steamer'
 ];
 
-client.once(Events.ClientReady, c => {
+// ─── MongoDB Schema kills ──────────────────────────────────────────
+const killSchema = new mongoose.Schema({
+  userId: String,
+  username: String,
+  kills: { type: Number, default: 0 },
+});
+const Kill = mongoose.model('Kill', killSchema);
+
+async function addKill(userId, username) {
+  let entry = await Kill.findOne({ userId });
+  if (!entry) entry = await Kill.create({ userId, username, kills: 0 });
+  entry.kills += 1;
+  entry.username = username; // garde le pseudo à jour
+  await entry.save();
+  return entry.kills;
+}
+
+async function removeKill(userId) {
+  const entry = await Kill.findOne({ userId });
+  if (!entry || entry.kills <= 0) return 0;
+  entry.kills -= 1;
+  await entry.save();
+  return entry.kills;
+}
+
+async function getClassement() {
+  return Kill.find({ kills: { $gt: 0 } }).sort({ kills: -1 }).limit(15);
+}
+
+async function resetClassement() {
+  await Kill.deleteMany({});
+}
+
+// ─── Reset hebdo automatique : mardi 13h ──────────────────────────
+function msUntilNextTuesday13h() {
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(13, 0, 0, 0);
+
+  const day = now.getDay(); // 0 = dimanche, 2 = mardi
+  let diff = (2 - day + 7) % 7;
+
+  if (diff === 0 && now >= target) {
+    diff = 7; // mardi déjà passé cette semaine → semaine prochaine
+  }
+
+  target.setDate(now.getDate() + diff);
+  return target.getTime() - now.getTime();
+}
+
+function scheduleWeeklyReset() {
+  const delay = msUntilNextTuesday13h();
+  setTimeout(async () => {
+    try {
+      const channel = await client.channels.fetch(KILL_CHANNEL_ID);
+      const top = await getClassement();
+      let msg = '🏆 **Fin de l\'event hebdomadaire — Classement final !**\n\n';
+      if (top.length === 0) {
+        msg += 'Aucune kill enregistrée cette semaine.';
+      } else {
+        const medals = ['🥇', '🥈', '🥉'];
+        top.forEach((e, i) => {
+          msg += `${medals[i] || `${i + 1}.`} **${e.username}** — ${e.kills} kills\n`;
+        });
+      }
+      await channel.send(msg);
+      await resetClassement();
+      await channel.send('🔄 Le classement a été réinitialisé. Nouvel event en cours !');
+    } catch (err) {
+      console.error('Erreur reset hebdo:', err);
+    }
+    scheduleWeeklyReset(); // reprogramme pour la semaine suivante
+  }, delay);
+}
+
+// ─── Slash commands ───────────────────────────────────────────────
+async function registerSlashCommand() {
+  const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
+  const commands = [
+    new SlashCommandBuilder().setName('classement').setDescription('Affiche le classement des kills de percepteurs'),
+  ].map(c => c.toJSON());
+  const guilds = client.guilds.cache.map(g => g.id);
+  for (const guildId of guilds) {
+    await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId), { body: commands });
+  }
+}
+
+client.once(Events.ClientReady, async c => {
   console.log(`✅ Connecté en tant que ${c.user.tag}`);
+  registerSlashCommand().catch(console.error);
+  scheduleWeeklyReset();
 });
 
-// ─── Commande !pingbutton → boutons perco ────────────────────────
+// ─── Commande !pingbutton / !donjonbutton ─────────────────────────
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
 
@@ -62,7 +159,6 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
 
-  // ─── Commande !donjonbutton → bouton ticket donjon ──────────────
   if (message.content === DONJON_COMMAND) {
     if (!message.member.permissions.has('Administrator')) {
       return message.reply('❌ Tu n\'as pas la permission.');
@@ -83,7 +179,73 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
+// ─── Réaction ✅ sur un screenshot dans le salon kills ────────────
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot) return;
+  if (reaction.message.channelId !== KILL_CHANNEL_ID) return;
+  if (reaction.emoji.name !== VALIDATION_EMOJI) return;
+
+  try {
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+  } catch (err) {
+    console.error('Erreur fetch reaction:', err);
+    return;
+  }
+
+  const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
+  const isAdmin = member?.permissions.has('Administrator');
+  if (!isAdmin) return; // seul un admin peut valider
+
+  const authorId = reaction.message.author.id;
+  const authorTag = reaction.message.author.username;
+  if (reaction.message.author.bot) return;
+
+  const total = await addKill(authorId, authorTag);
+  await reaction.message.reply(`✅ Kill validée pour **${authorTag}** ! Total : **${total}** kills cette semaine.`);
+});
+
+// ─── Retrait de la réaction = annule la kill ──────────────────────
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
+  if (reaction.message.channelId !== KILL_CHANNEL_ID) return;
+  if (reaction.emoji.name !== VALIDATION_EMOJI) return;
+
+  try {
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+  } catch (err) {
+    console.error('Erreur fetch reaction:', err);
+    return;
+  }
+
+  const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
+  const isAdmin = member?.permissions.has('Administrator');
+  if (!isAdmin) return;
+
+  if (reaction.message.author.bot) return;
+  const authorId = reaction.message.author.id;
+  await removeKill(authorId);
+});
+
 client.on(Events.InteractionCreate, async interaction => {
+
+  // ── /classement ──
+  if (interaction.isChatInputCommand() && interaction.commandName === 'classement') {
+    const top = await getClassement();
+    let msg = '🏆 **Classement de la semaine — Chasse aux percepteurs**\n\n';
+    if (top.length === 0) {
+      msg += 'Aucune kill validée pour le moment.';
+    } else {
+      const medals = ['🥇', '🥈', '🥉'];
+      top.forEach((e, i) => {
+        msg += `${medals[i] || `${i + 1}.`} **${e.username}** — ${e.kills} kills\n`;
+      });
+    }
+    msg += '\n🔄 Reset automatique chaque mardi à 13h.';
+    await interaction.reply({ content: msg });
+    return;
+  }
 
   // ── Bouton compo (perco) ──
   if (interaction.isButton() && interaction.customId === BUTTON_ID) {
@@ -251,4 +413,10 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-client.login(process.env.BOT_TOKEN);
+// ─── Connexion MongoDB puis Discord ──────────────────────────────
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log('✅ MongoDB connecté');
+    client.login(process.env.BOT_TOKEN);
+  })
+  .catch(err => console.error('❌ Erreur MongoDB:', err));
