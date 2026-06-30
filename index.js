@@ -226,14 +226,23 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   const isAdmin = member?.permissions.has('Administrator');
   if (!isAdmin) return;
 
-  const authorId = reaction.message.author.id;
-  const authorTag = reaction.message.author.username;
-  const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
+const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
 
-  const total = await addKill(authorId, authorTag, points);
-  await user.send(`✅ +${points} point${points > 1 ? 's' : ''} pour **${authorTag}** ! Total : **${total}** kills cette semaine.`).catch(() => {});
-  await updateLiveClassement();
+// Récupère l'auteur + tous les joueurs mentionnés dans le message
+const players = new Map();
+players.set(reaction.message.author.id, reaction.message.author.username);
+reaction.message.mentions.users.forEach(u => {
+  if (!u.bot) players.set(u.id, u.username);
 });
+
+let recap = '';
+for (const [playerId, playerName] of players) {
+  const total = await addKill(playerId, playerName, points);
+  recap += `${playerName} : +${points} (total ${total})\n`;
+}
+
+await user.send(`✅ Points attribués :\n${recap}`).catch(() => {});
+await updateLiveClassement();
 
 // ─── Retrait de la réaction = annule la kill ──────────────────────
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
@@ -255,11 +264,19 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   const isAdmin = member?.permissions.has('Administrator');
   if (!isAdmin) return;
 
-  const authorId = reaction.message.author.id;
-  const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
-  await removeKill(authorId, points);
-  await updateLiveClassement();
+const points = reaction.emoji.name === BONUS_EMOJI ? 2 : 1;
+
+const players = new Map();
+players.set(reaction.message.author.id, reaction.message.author.username);
+reaction.message.mentions.users.forEach(u => {
+  if (!u.bot) players.set(u.id, u.username);
 });
+
+for (const [playerId] of players) {
+  await removeKill(playerId, points);
+}
+
+await updateLiveClassement();
 
 client.on(Events.InteractionCreate, async interaction => {
 
